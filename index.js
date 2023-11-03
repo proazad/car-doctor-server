@@ -1,12 +1,19 @@
 const express = require("express");
 const cors = require("cors");
+const jwt = require("jsonwebtoken");
+const cookieParser = require('cookie-parser');
 const port = process.env.PORT || 5000;
 const app = express();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config()
 // middleware 
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:5173'],
+    credentials: true
+}));
 app.use(express.json());
+app.use(cookieParser());
+
 
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.h7gpv70.mongodb.net/?retryWrites=true&w=majority`;
@@ -20,6 +27,26 @@ const client = new MongoClient(uri, {
     }
 });
 
+// middleware 
+const logger = async (req, res, next) => {
+    console.log("called : ", req.hostname, req.originalUrl);
+    next();
+}
+
+const verifyToken = async (req, res, next) => {
+    const token = req.cookies?.token;
+    console.log("token from Middle ware", token);
+    if (!token) {
+        return res.status(401).send({ message: "Not Authorized" });
+    }
+    jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(401).send({ message: "Unauthorized" })
+        }
+        req.user = decoded;
+        next();
+    })
+}
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
@@ -27,7 +54,22 @@ async function run() {
         // Send a ping to confirm a successful connection
         const servicesCollection = client.db("carDoctor").collection("services");
         const bookingsCollection = client.db("carDoctor").collection("bookings");
+        // Auth Related API 
+        app.post("/jwt", async (req, res) => {
+            const user = req.body;
+            const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+                expiresIn: "1h"
+            })
+            res
+                .cookie("token", token, {
+                    httpOnly: true,
+                    secure: false
+                })
+                .send({ success: true });
+        });
 
+
+        // Service Related API 
         app.get("/services", async (req, res) => {
             const cursor = servicesCollection.find();
             const result = await cursor.toArray();
@@ -52,12 +94,15 @@ async function run() {
             res.send(result)
         })
 
-        app.get("/bookings", async (req, res) => {
+        app.get("/bookings", verifyToken, async (req, res) => {
             let query = {};
+            console.log("User in Valid Token:", req.user);
+            if(req.query.email !== req.user.email){
+                return res.status(403).send({message: "Forbbiden"})
+            }
             if (req.query?.email) {
                 query = { email: req.query.email }
             }
-            console.log(query);
             const bookings = await bookingsCollection.find(query).toArray();
             res.send(bookings);
         })
